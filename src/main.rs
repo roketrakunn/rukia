@@ -11,6 +11,7 @@ use std::{ffi::CString, os::fd::{AsRawFd, BorrowedFd}};
 // Spawn an isolated container process using Linux namespaces.
 // root: path to the rootfs directory (e.g. ./alpine)
 // cmd:  path to the binary to execute inside the container (e.g. /bin/sh)
+// TODO: put terminal in raw mode to fix escape code leaking from slave buffer.
 fn run_container(root: &str, cmd: &str) {
     // Each flag isolates a different view of the system for the child:
     // NEWPID  → own PID namespace (child appears as PID 1)
@@ -43,7 +44,6 @@ fn run_container(root: &str, cmd: &str) {
         execv(&cmd_cstr, &[&cmd_cstr]).expect("execv failed");
 
         unreachable!()
-
     });
 
     // The child needs its own stack. We allocate it manually because clone()
