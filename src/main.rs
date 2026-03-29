@@ -44,7 +44,6 @@ fn run_container(root: &str, cmd: &str) {
         execv(&cmd_cstr, &[&cmd_cstr]).expect("execv failed");
 
         unreachable!()
-
     });
 
     // The child needs its own stack. We allocate it manually because clone()
