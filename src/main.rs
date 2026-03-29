@@ -22,9 +22,9 @@ fn run_container(root: &str, cmd: &str) {
         | CloneFlags::CLONE_NEWNET
         | CloneFlags::CLONE_NEWUTS;
 
-    // Create the pty pair before clone() so both parent and child inherit the fds.
+    // Create the pty pair before clone() so both parent and child inherit the fds
     // master → parent uses this to read/write to the shell
-    // slave  → child uses this as its stdin/stdout/stderr
+    // slave → child uses this as its stdin/stdout/stderr
     let pty = openpty(None, None).expect("openpty failed");
     let slave_fd = pty.slave.as_raw_fd();
 
@@ -43,10 +43,11 @@ fn run_container(root: &str, cmd: &str) {
         execv(&cmd_cstr, &[&cmd_cstr]).expect("execv failed");
 
         unreachable!()
+
     });
 
     // The child needs its own stack. We allocate it manually because clone()
-    // hands a raw pointer to the kernel — outside Rust's safety guarantees.
+    // hands a raw pointer to the kernel — outside Rust's safety guarantees
     let mut stack = [0u8; 1024 * 1024]; // 1MB
 
     unsafe {
@@ -102,7 +103,7 @@ fn run_container(root: &str, cmd: &str) {
                         .expect("read master failed");
                     nix::unistd::write(stdout_fd, &buf[..n]).expect("write stdout failed");
                 } else if revents.contains(PollFlags::POLLHUP) {
-                    // Master hung up — shell has exited
+                    // Master hung up — shell has exited.
                     break;
                 }
             }
