@@ -1,13 +1,13 @@
 use nix::{
     libc::SIGCHLD,
-    poll::{poll, PollFd, PollFlags, PollTimeout},
+    poll::{PollFd, PollFlags, PollTimeout, poll},
     pty::openpty,
-    sched::{clone, CloneFlags},
+    sched::{CloneFlags, clone},
     sys::{
-        termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg},
-        wait::{waitpid, WaitPidFlag, WaitStatus},
+        termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr},
+        wait::{WaitPidFlag, WaitStatus, waitpid},
     },
-    unistd::{chdir, chroot, dup2, execv},
+    unistd::{chdir, chroot, dup2, execv, setsid},
 };
 use std::{ffi::CString, os::fd::{AsRawFd, BorrowedFd}};
 
@@ -35,6 +35,11 @@ fn run_container(root: &str, cmd: &str) {
     // The child closure — runs inside the container after clone().
     // Wires the slave pty to stdio, chroots into the rootfs, then execs the command.
     let child_fn = Box::new(|| {
+
+        setsid().expect("setif failed"); 
+        unsafe { 
+            nix::libc::ioctl(slave_fd,nix::libc::TIOCSCTTY, 0);
+        }
         dup2(slave_fd, 0).expect("dup2 stdin failed");
         dup2(slave_fd, 1).expect("dup2 stdout failed");
         dup2(slave_fd, 2).expect("dup2 stderr failed");
