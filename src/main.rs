@@ -3,7 +3,10 @@ use nix::{
     poll::{poll, PollFd, PollFlags, PollTimeout},
     pty::openpty,
     sched::{clone, CloneFlags},
-    sys::wait::{waitpid, WaitPidFlag, WaitStatus},
+    sys::{
+        termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg},
+        wait::{waitpid, WaitPidFlag, WaitStatus},
+    },
     unistd::{chdir, chroot, dup2, execv},
 };
 use std::{ffi::CString, os::fd::{AsRawFd, BorrowedFd}};
@@ -41,6 +44,7 @@ fn run_container(root: &str, cmd: &str) {
 
         // execv requires null-terminated C strings — the kernel speaks C.
         let cmd_cstr = CString::new(cmd).unwrap();
+        unsafe { std::env::set_var("PATH","/bin:/sbin:/usr/bin:/usr/sbin") }
         execv(&cmd_cstr, &[&cmd_cstr]).expect("execv failed");
 
         unreachable!()
@@ -64,6 +68,12 @@ fn run_container(root: &str, cmd: &str) {
             PollFd::new(stdin_fd, PollFlags::POLLIN),  // watch our stdin for keystrokes
             PollFd::new(master_fd, PollFlags::POLLIN), // watch master pty for shell output
         ];
+
+        let orig = tcgetattr(stdin_fd).expect("tcgetattr failed");
+        let mut raw = orig.clone();
+        cfmakeraw(&mut raw);
+        tcsetattr(stdin_fd, SetArg::TCSANOW, &raw).expect("tcsetattr failed");
+
 
         loop {
             // Check if the child exited before polling again
@@ -107,7 +117,11 @@ fn run_container(root: &str, cmd: &str) {
                     break;
                 }
             }
+
         }
+
+        // Restore original terminal settings before exiting
+        tcsetattr(stdin_fd, SetArg::TCSANOW, &orig).expect("tcsetattr restore failed");
     }
 }
 
