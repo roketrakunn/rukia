@@ -11,8 +11,9 @@ use nix::{
 };
 use std::{ffi::CString, os::fd::{AsRawFd, BorrowedFd}, process::Command};
 
-// Creates the veth pair on the host and assigns the host-side IP.
-// veth0 stays on the host, veth1 will be moved into the container.
+// Creates the veth pair on the host, assigns the host-side IP,
+// enables IP forwarding, and adds a NAT masquerade rule so the
+// container's traffic can reach the internet.
 fn setup_network() {
     Command::new("ip")
         .args(&["link", "add", "veth0", "type", "veth", "peer", "name", "veth1"])
@@ -28,10 +29,20 @@ fn setup_network() {
         .args(&["addr", "add", "10.0.0.1/24", "dev", "veth0"])
         .status()
         .expect("failed to assign host IP");
+
+    // Allow the kernel to forward packets between interfaces (host acts as router)
+    std::fs::write("/proc/sys/net/ipv4/ip_forward", "1")
+        .expect("failed to enable ip forwarding");
+
+    // Masquerade outgoing container traffic — rewrites src IP to host's real IP
+    Command::new("iptables")
+        .args(&["-t", "nat", "-A", "POSTROUTING", "-s", "10.0.0.0/24", "-j", "MASQUERADE"])
+        .status()
+        .expect("failed to add masquerade rule");
 }
 
 // Moves veth1 into the container's network namespace (identified by pid),
-// then configures it with an IP from within that namespace using nsenter.
+// then configures networking from within that namespace using nsenter.
 fn move_veth_to_container(pid: i32) {
     Command::new("ip")
         .args(&["link", "set", "veth1", "netns", &pid.to_string()])
@@ -49,6 +60,18 @@ fn move_veth_to_container(pid: i32) {
         .args(&[&netns_flag, "ip", "addr", "add", "10.0.0.2/24", "dev", "veth1"])
         .status()
         .expect("failed to assign container IP");
+
+    // Default route — send all non-local traffic to the host (our gateway)
+    Command::new("nsenter")
+        .args(&[&netns_flag, "ip", "route", "add", "default", "via", "10.0.0.1"])
+        .status()
+        .expect("failed to add default route");
+
+    // DNS — point at Google's resolver so hostnames resolve
+    Command::new("nsenter")
+        .args(&[&netns_flag, "sh", "-c", "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"])
+        .status()
+        .expect("failed to set DNS");
 }
 
 // Spawns an isolated container process using Linux namespaces.
@@ -172,6 +195,9 @@ fn run_container(root: &str, cmd: &str) {
                 }
             }
         }
+
+        // Clean up the veth pair on exit so the host network is left clean.
+        Command::new("ip").args(&["link", "delete", "veth0"]).status().ok();
 
         // Restore original terminal settings before exiting.
         tcsetattr(stdin_fd, SetArg::TCSANOW, &orig).expect("tcsetattr restore failed");
