@@ -7,7 +7,7 @@ use nix::{
         termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg},
         wait::{waitpid, WaitPidFlag, WaitStatus},
     },
-    unistd::{chdir, chroot, dup2, execv, setsid},
+    unistd::{chdir, chroot, close, dup2, execv, pipe, read, setsid},
 };
 use std::{ffi::CString, os::fd::{AsRawFd, BorrowedFd}, process::Command};
 
@@ -15,6 +15,9 @@ use std::{ffi::CString, os::fd::{AsRawFd, BorrowedFd}, process::Command};
 // enables IP forwarding, and adds a NAT masquerade rule so the
 // container's traffic can reach the internet.
 fn setup_network() {
+    // Clean up any leftover veth from a previous crashed run
+    Command::new("ip").args(&["link", "del", "veth0"]).status().ok();
+
     Command::new("ip")
         .args(&["link", "add", "veth0", "type", "veth", "peer", "name", "veth1"])
         .status()
@@ -67,6 +70,12 @@ fn move_veth_to_container(pid: i32) {
         .status()
         .expect("failed to add default route");
 
+    // Bring up loopback so localhost works inside the container
+    Command::new("nsenter")
+        .args(&[&netns_flag, "ip", "link", "set", "lo", "up"])
+        .status()
+        .expect("failed to bring lo up");
+
     // DNS — point at Google's resolver so hostnames resolve
     Command::new("nsenter")
         .args(&[&netns_flag, "sh", "-c", "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"])
@@ -92,6 +101,13 @@ fn run_container(root: &str, cmd: &str) {
     // the network namespace we're about to configure.
     setup_network();
 
+    // Create a pipe to synchronize child startup with network setup.
+    // Child blocks on read until parent closes the write end, guaranteeing
+    // networking is fully configured before the shell starts.
+    let (pipe_r, pipe_w) = pipe().expect("pipe failed");
+    let pipe_r_fd = pipe_r.as_raw_fd();
+    let pipe_w_fd = pipe_w.as_raw_fd();
+
     // Create the pty pair before clone() so both parent and child inherit the fds.
     // master → parent reads/writes here to talk to the shell
     // slave  → child uses this as its stdin/stdout/stderr
@@ -101,7 +117,13 @@ fn run_container(root: &str, cmd: &str) {
     // The child closure — runs inside the container after clone().
     // Becomes a session leader, wires the slave pty to stdio,
     // chroots into the rootfs, sets PATH, then execs the command.
-    let child_fn = Box::new(|| {
+    let child_fn = Box::new(move || {
+        // Close write end and block on read — waits until parent signals ready
+        close(pipe_w_fd).ok();
+        let mut b = [0u8; 1];
+        read(pipe_r_fd, &mut b).ok();
+        close(pipe_r_fd).ok();
+
         setsid().expect("setsid failed");
 
         // Attach the slave pty as the controlling terminal for this session,
@@ -135,6 +157,9 @@ fn run_container(root: &str, cmd: &str) {
 
         // Move veth1 into the container's network namespace and configure it.
         move_veth_to_container(child_pid.as_raw());
+
+        // Network is ready — unblock the child by closing the write end of the pipe
+        close(pipe_w_fd).ok();
 
         let master_fd = BorrowedFd::borrow_raw(pty.master.as_raw_fd());
         let stdin_fd = BorrowedFd::borrow_raw(0);
