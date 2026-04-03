@@ -14,6 +14,7 @@ use std::{ffi::CString, os::fd::{AsRawFd, BorrowedFd}, process::Command};
 // Creates the veth pair on the host, assigns the host-side IP,
 // enables IP forwarding, and adds a NAT masquerade rule so the
 // container's traffic can reach the internet.
+// roketrakunn was here
 fn setup_network() {
     // Clean up any leftover veth from a previous crashed run
     Command::new("ip").args(&["link", "del", "veth0"]).status().ok();
