@@ -38,7 +38,7 @@ fn setup_network() {
     std::fs::write("/proc/sys/net/ipv4/ip_forward", "1")
         .expect("failed to enable ip forwarding");
 
-    // Masquerade outgoing container traffic — rewrites src IP to host's real IP
+    // Masquerade outgoing container traffic — rewrites the source IP to the host's real IP
     Command::new("iptables")
         .args(&["-t", "nat", "-A", "POSTROUTING", "-s", "10.0.0.0/24", "-j", "MASQUERADE"])
         .status()
@@ -198,7 +198,7 @@ fn run_container(root: &str, cmd: &str) {
 
             poll(&mut fds, PollTimeout::NONE).expect("poll failed");
 
-            // Keystroke from our terminal → forward to the shell via master
+            // Keystroke from our terminal — forward to the shell via the master pty
             if let Some(revents) = fds[0].revents() {
                 if revents.contains(PollFlags::POLLIN) {
                     let mut buf = [0u8; 1024];
@@ -208,7 +208,7 @@ fn run_container(root: &str, cmd: &str) {
                 }
             }
 
-            // Shell output from master → forward to our terminal's stdout
+            // Shell output from the master pty — forward to our terminal's stdout
             if let Some(revents) = fds[1].revents() {
                 if revents.contains(PollFlags::POLLIN) {
                     let mut buf = [0u8; 1024];
